@@ -1274,4 +1274,26 @@ def test_a_span_holding_an_import_read_after_it_is_refused():
         spans = find_extractions(_first(src), get_language_map("python"))
     found = {(x.start_line, x.end_line): (x.params, x.returns) for x in spans}
     assert (3, 5) not in found
-    assert found[(4, 6)] == (("a", "c"), ("t",))
+    assert (4, 6) not in found
+    assert found[(3, 6)] == (("a", "c"), ("t",))
+
+
+@pytest.mark.parametrize(
+    ("prefix", "inside", "floor", "offered"),
+    [("import json\n", "", 0, True), ("", "    import json\n", 2, False)],
+)
+def test_import_scope_controls_extractability(prefix, inside, floor, offered):
+    src = f"""{prefix}def f(v):
+{inside}    n = 0
+    dump = lambda x: json.dumps(x)
+    if v: n += len(dump(v))
+    if n: n += len(dump(n))
+    return n
+"""
+    with pytest.MonkeyPatch.context() as mp:
+        from repowise.core.analysis.health.dataflow import slice as slicer
+
+        mp.setattr(slicer, "_MAX_BODY_SHARE", float("inf"))
+        mp.setattr(slicer, "_MIN_SLICE_NLOC", 1)
+        spans = find_extractions(_first(src), get_language_map("python"))
+    assert any(floor < x.start_line <= 4 <= x.end_line for x in spans) is offered
