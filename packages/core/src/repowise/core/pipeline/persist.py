@@ -1262,9 +1262,7 @@ async def prune_deleted_file_rows(
     # documents it read, so a deleted one is never in scope and its rows would
     # outlive the file without this. ``_FileLiveness`` asks disk and
     # ``git ls-files`` rather than the parse, so a ``.md`` path is judged
-    # correctly here. Note the LLM-regenerating update path never reaches this
-    # function, so drift rows for a document deleted there wait for a reindex,
-    # as dead-code and health rows already do.
+    # correctly here.
     await _prune_table(DocDriftFinding, DocDriftFinding.file_path, "doc_drift_findings")
     # On the document only. A reference to a deleted *target* is drift, not a
     # dead row: the next pass re-resolves it into a finding, and pruning by
@@ -2009,6 +2007,17 @@ async def save_full_health_report(
                 commit=analyzed_commit,
             ),
         )
+        # No rows means no graph to key them on: the stored ones stay. Before
+        # the finalizers, which read each plan's nearest tests off these rows.
+        fact_rows = getattr(hr, "function_facts", None)
+        if fact_rows is not None:
+            await write_function_facts(
+                session,
+                repo_id,
+                fact_rows,
+                roles=getattr(hr, "execution_roles", None),
+                tests=getattr(hr, "function_tests", None),
+            )
         # Group the stored performance findings into the materialized causal
         # read model, then reconcile lifecycle and plans.
         await finalize_performance_opportunities(
@@ -2022,12 +2031,6 @@ async def save_full_health_report(
         # savepoint because it composes over the stored rows, so it has to see
         # the reconciliation above rather than the detector output.
         await finalize_refactoring_opportunities(session, repo_id, analyzed_commit=analyzed_commit)
-        # No rows means no graph to key them on: the stored ones stay.
-        fact_rows = getattr(hr, "function_facts", None)
-        if fact_rows is not None:
-            await write_function_facts(
-                session, repo_id, fact_rows, roles=getattr(hr, "execution_roles", None)
-            )
 
 
 async def refresh_governance_findings(

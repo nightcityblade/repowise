@@ -41,7 +41,7 @@ import {
   RefactoringModelToggle,
   type RefactoringModelToggleProps,
 } from "./refactoring-settings-card";
-import { extractHelperDetail, extractMethodSignature, stepExcerptRange } from "./types";
+import { extractHelperDetail, extractMethodSignature, formatSpans, stepExcerptRange } from "./types";
 import {
   ORDERING_NOTE,
   STATUS_LABEL,
@@ -653,7 +653,17 @@ function StepCode({
   const range = stepExcerptRange(step, plan);
   const extraction = range?.extraction ?? null;
   const slice = extraction?.span ?? null;
+  const stages = range?.stages ?? [];
   const canRead = Boolean(readSource && range);
+  // One read per file however many stage excerpts ask for it.
+  const readOnce = React.useMemo(() => {
+    if (!readSource) return undefined;
+    const reads = new Map<string, Promise<string>>();
+    return (path: string) => {
+      if (!reads.has(path)) reads.set(path, readSource(path));
+      return reads.get(path)!;
+    };
+  }, [readSource]);
   if (!stored?.snippet && !canRead && !plan) return null;
   return (
     <div className="mt-2">
@@ -667,6 +677,15 @@ function StepCode({
       </button>
       {open ? (
         <div className="mt-2 space-y-3">
+          {stages.length > 0 ? (
+            <p className="text-[11.5px] text-[var(--color-text-tertiary)]">
+              Lines{" "}
+              <span className="font-mono tabular-nums text-[var(--color-text-secondary)]">
+                {formatSpans(stages.map((st) => st.span))}
+              </span>{" "}
+              become {stages.length} helpers the function calls in order.
+            </p>
+          ) : null}
           {extraction && slice ? (
             <p className="text-[11.5px] text-[var(--color-text-tertiary)]">
               Lines {slice.start} to {slice.end} become{" "}
@@ -677,12 +696,28 @@ function StepCode({
           ) : null}
           {stored?.snippet ? (
             <CodeBlock code={stored.snippet} startLine={stored.snippetStartLine} />
+          ) : canRead && stages.length > 0 ? (
+            // Each stage on its own: one range from the first stage to the last
+            // would show the lines between them and could cut a later stage.
+            stages.map((st, i) => (
+              <div key={st.span.start} className="space-y-1">
+                <p className="font-mono text-[11px] text-[var(--color-text-tertiary)]">
+                  {`${st.name ?? `Stage ${i + 1}`} · lines ${formatSpans([st.span])}`}
+                </p>
+                <SourceExcerpt
+                  path={step.file_path}
+                  start={st.span.start}
+                  end={st.span.end}
+                  readSource={readOnce!}
+                />
+              </div>
+            ))
           ) : canRead ? (
             <SourceExcerpt
               path={step.file_path}
               start={range!.start}
               end={range!.end}
-              readSource={readSource!}
+              readSource={readOnce!}
             />
           ) : null}
           {plan && onGenerateCode ? (

@@ -49,6 +49,7 @@ from repowise.core.analysis.test_reachability import (
 from ...models import GraphMetric, GraphNode, HealthFileMetric
 from ..graph import get_graph_metrics
 from .coverage_map import tests_covering_files
+from .function_facts import tests_in_files
 from .health import get_health_metrics
 
 
@@ -61,6 +62,7 @@ async def hydrate_recommendations(
     view: RecommendationView = "canonical",
     test_limit: int = DEFAULT_TEST_LIMIT,
     step_verify: bool = False,
+    findings: Sequence[Any] | None = None,
 ) -> list[Recommendation]:
     """Hydrate, enrich, validate, rank, and serialize-ready all *rows*.
 
@@ -70,7 +72,9 @@ async def hydrate_recommendations(
 
     *step_verify* also validates each step of a multi-step plan
     (:func:`with_step_verify`). Finalize asks, so it is stored once; a live
-    read never rebuilds it and serves the plan-level answer.
+    read never rebuilds it and serves the plan-level answer. Finalize also
+    passes the repository's *findings*, so a plan that leaves a function at
+    the break-up bar is marked and ranked after the rest.
     """
     if not rows:
         return []
@@ -97,6 +101,7 @@ async def hydrate_recommendations(
         metric_by_path={metric.file_path: metric for metric in metrics},
         centrality=centrality,
         validations=dict(enumerate(plans)),
+        findings=findings,
     )
     return apply_view(recommendations, view)
 
@@ -198,7 +203,14 @@ async def validation_inputs(
         [item for item in suggestions if hubs.intersection(affected_files(item))],
         hub_targets,
         test_files,
-        ValidationEvidence(hubs=hubs, siblings=_siblings(in_degree)),
+        # Spans and nearest tests for every target file, hub or not, and for
+        # every function there: a step of a multi-step plan narrows to its own.
+        ValidationEvidence(
+            hubs=hubs,
+            siblings=_siblings(in_degree),
+            symbols=await _symbol_spans(session, repository_id, target_files),
+            function_tests=await tests_in_files(session, repository_id, target_files),
+        ),
     )
     return ValidationInputs(
         measured=measured, inferred=inferred, test_files=test_files, evidence=evidence
@@ -220,15 +232,8 @@ async def _validation_evidence(
     """
     if not target_files:
         return base
-    rows = await session.execute(
-        select(GraphNode.file_path, GraphNode.node_id, GraphNode.start_line, GraphNode.end_line)
-        .where(GraphNode.repository_id == repository_id)
-        .where(GraphNode.node_type == "symbol")
-        .where(GraphNode.file_path.in_(list(target_files)))
-    )
-    spans: dict[str, list[SymbolSpan]] = {}
-    for file_path, node_id, start, end in rows:
-        spans.setdefault(file_path, []).append((node_id, int(start or 0), int(end or 0)))
+    unread = [path for path in target_files if path not in base.symbols]
+    spans = {**base.symbols, **await _symbol_spans(session, repository_id, unread)}
     symbol_ids = {
         symbol
         for suggestion in suggestions
@@ -243,6 +248,24 @@ async def _validation_evidence(
         ),
         imports=await imported_names_by_test(session, repository_id, target_files, test_files),
     )
+
+
+async def _symbol_spans(
+    session: AsyncSession, repository_id: str, files: Sequence[str]
+) -> dict[str, list[SymbolSpan]]:
+    """Each file's symbol ids with their line spans, in one statement."""
+    if not files:
+        return {}
+    rows = await session.execute(
+        select(GraphNode.file_path, GraphNode.node_id, GraphNode.start_line, GraphNode.end_line)
+        .where(GraphNode.repository_id == repository_id)
+        .where(GraphNode.node_type == "symbol")
+        .where(GraphNode.file_path.in_(list(files)))
+    )
+    spans: dict[str, list[SymbolSpan]] = {}
+    for file_path, node_id, start, end in rows:
+        spans.setdefault(file_path, []).append((node_id, int(start or 0), int(end or 0)))
+    return spans
 
 
 async def plan_rank_inputs(
