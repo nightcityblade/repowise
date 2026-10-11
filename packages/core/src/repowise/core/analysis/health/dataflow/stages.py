@@ -59,6 +59,7 @@ from .slice import (
     _declaration_escapes,
     _declaration_lines,
     _declared_before_read,
+    _definition_ends,
     _function_lines,
     _hoisted_bindings,
     _identifiers,
@@ -243,6 +244,7 @@ class _Cutter:
         def_use = analysis.def_use
         self.def_lines, self.use_lines = _var_lines(def_use)
         self.declared_first = _declared_before_read(def_use)
+        self.definition_ends = _definition_ends(analysis, lmap)
         self.hoisted = _hoisted_bindings(self.def_lines, self.use_lines)
         self.decl_lines = _declaration_lines(def_use)
         self.shared = _closure_state(def_use, self.def_lines, self.use_lines)
@@ -309,7 +311,8 @@ class _Cutter:
         span = self.code[i : j + 1]
         s, e = span[0].start_point[0] + 1, span[-1].end_point[0] + 1
         params, returns = _infer_in_out(
-            self.def_lines, self.use_lines, s, e, self.declared_first, reads=self.reads
+            self.def_lines, self.use_lines, s, e, self.declared_first,
+            reads=self.reads, ends=self.definition_ends,
         )
         returns = self._own_bindings_dropped(span, s, e, returns)
         params = self._with_inouts(i, j, s, params, returns)
