@@ -716,9 +716,9 @@ def _infer_in_out(
     s: int,
     e: int,
     declared_first: dict[str, frozenset[int]],
+    ends: dict[tuple[str, int], int] | None = None,
     *,
     reads: dict[str, list[tuple[int, frozenset[int]]]],
-    ends: dict[tuple[str, int], int] | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Infer IN (parameters) and OUT (return) variables for span ``[s, e]``.
 
